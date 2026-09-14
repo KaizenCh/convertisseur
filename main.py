@@ -2566,13 +2566,17 @@ class MainWindow(QMainWindow):
         )
 
     def run_unreal_export_steps(self) -> None:
-        if not self.config["source"]["unreal_map"]:
+        source_path = self.config["source"]["unreal_map"]
+        if not source_path:
             QMessageBox.warning(self, "Source", "Veuillez d'abord sélectionner une map Unreal ou un dossier source.")
             return
 
+        p = Path(source_path).expanduser()
+        export_dir = str(p.parent if p.is_file() else p)
+
         cfg_dict = {
             "paths": {
-                "ue_export_root": self.config["source"]["unreal_map"],
+                "ue_export_root": export_dir,
                 "godot_asset_root": self.config["advanced"].get("godot_asset_root", "res://UEAssets")
             }
         }
