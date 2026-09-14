@@ -358,17 +358,33 @@ class SourceAnalyzer:
     LANDSCAPE_SYNTHETIC_KEY = "/AutoTerrain/Landscape.BakedLandscape"
 
     def analyze(self, source: str) -> SourceInventory:
-        root = Path(source).expanduser()
+        input_path = Path(source).expanduser()
+
+        if not input_path.exists():
+            inventory = SourceInventory(source_root=str(input_path))
+            inventory.errors.append("Le chemin source n'existe pas.")
+            return inventory
+
+        # If a file like .umap / .uproject is selected, resolve its directory or parent export location
+        if input_path.is_file():
+            root = input_path.parent
+        else:
+            root = input_path
+
+        # Find closest export or project directory
+        curr = root
+        search_roots = [root]
+        for _ in range(5):
+            if (curr / "level_manifest_v10.json").exists() or (curr / "GodotAssets").exists():
+                root = curr
+                break
+            if (curr / "Export").exists():
+                search_roots.append(curr / "Export")
+            if curr.parent == curr:
+                break
+            curr = curr.parent
 
         inventory = SourceInventory(source_root=str(root))
-
-        if not root.exists():
-            inventory.errors.append("Le dossier source n'existe pas.")
-            return inventory
-
-        if not root.is_dir():
-            inventory.errors.append("La source sélectionnée n'est pas un dossier.")
-            return inventory
 
         manifest = find_first_existing(
             root,
@@ -388,9 +404,10 @@ class SourceAnalyzer:
             inventory.manifest_found = True
             self._read_manifest(manifest, inventory)
         else:
-            inventory.errors.append(
-                "Manifest introuvable. Le constructeur a besoin de la description "
-                "complète de la map (level_manifest_v10.json)."
+            # If selecting a .umap or project without pre-exported manifest yet, mark as pending export instead of hard error
+            inventory.warnings.append(
+                "Manifest introuvable dans le dossier sélectionné. L'étape 1 (Manifest) générera "
+                "level_manifest_v10.json à partir de cette map Unreal."
             )
 
         asset_map = find_first_existing(
@@ -411,9 +428,8 @@ class SourceAnalyzer:
             inventory.asset_map_found = True
             self._read_asset_map(asset_map, inventory)
         else:
-            inventory.errors.append(
-                "Asset map introuvable (ue5_godot_asset_map.json). La résolution "
-                "UE5 → GLB ne peut pas être garantie."
+            inventory.warnings.append(
+                "Asset map introuvable (ue5_godot_asset_map.json). L'étape 2 (Meshes) générera l'asset map."
             )
 
         decal_map = find_first_existing(
@@ -443,8 +459,8 @@ class SourceAnalyzer:
             inventory.mesh_directory_found = True
             inventory.mesh_files = count_glb(mesh_dir)
         else:
-            inventory.errors.append(
-                "Dossier de meshes introuvable (GodotAssets/Meshes)."
+            inventory.warnings.append(
+                "Dossier de meshes introuvable (GodotAssets/Meshes). L'étape 2 (Meshes) exportera les GLB."
             )
 
         decal_dir = self._find_decal_directory(root)
@@ -1047,11 +1063,13 @@ class BrowseRow(QWidget):
         label: str,
         placeholder: str = "",
         directory: bool = True,
+        allow_files: bool = False,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
 
         self.directory = directory
+        self.allow_files = allow_files
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1071,19 +1089,34 @@ class BrowseRow(QWidget):
         self.label = label
 
     def browse(self) -> None:
-        if self.directory:
+        if self.directory and not self.allow_files:
             path = QFileDialog.getExistingDirectory(
                 self,
-                f"Sélectionner — {self.label}",
+                f"Sélectionner le dossier — {self.label}",
             )
+            if path:
+                self.input.setText(path)
+        elif self.allow_files:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                f"Sélectionner un fichier (.umap, .uproject, manifest) — {self.label}",
+                "",
+                "Fichiers Unreal / Manifest (*.umap *.uproject *.json);;Dossier / Tous les fichiers (*)"
+            )
+            if not path:
+                path = QFileDialog.getExistingDirectory(
+                    self,
+                    f"Sélectionner le dossier source — {self.label}",
+                )
+            if path:
+                self.input.setText(path)
         else:
             path, _ = QFileDialog.getOpenFileName(
                 self,
                 f"Sélectionner — {self.label}",
             )
-
-        if path:
-            self.input.setText(path)
+            if path:
+                self.input.setText(path)
 
     def text(self) -> str:
         return self.input.text().strip()
@@ -1737,8 +1770,9 @@ class MainWindow(QMainWindow):
 
         self.source_row = BrowseRow(
             "Map Unreal",
-            "Dossier de la map / package de conversion",
+            "Dossier de la map ou fichier (.umap, .uproject, manifest)",
             directory=True,
+            allow_files=True,
         )
         self.source_row.input.textChanged.connect(
             self.on_source_changed
@@ -1850,6 +1884,21 @@ class MainWindow(QMainWindow):
 
         page.addWidget(self.context_source_card)
 
+        # Action bar at bottom of Page 2 (Sources)
+        actions = QHBoxLayout()
+
+        self.generate_manifest_button = QPushButton("Générer les exports Unreal (Manifest & Assets)")
+        self.generate_manifest_button.setObjectName("SecondaryButton")
+        self.generate_manifest_button.clicked.connect(self.run_unreal_export_steps)
+
+        self.next_to_options_button = QPushButton("Continuer vers Options →")
+        self.next_to_options_button.clicked.connect(lambda: self.go_to_page(self.PAGE_OPTIONS))
+
+        actions.addWidget(self.generate_manifest_button)
+        actions.addStretch()
+        actions.addWidget(self.next_to_options_button)
+
+        page.addLayout(actions)
         page.addStretch()
         return page
 
@@ -2516,6 +2565,42 @@ class MainWindow(QMainWindow):
             self.preprocessing_check.isChecked()
         )
 
+    def run_unreal_export_steps(self) -> None:
+        source_path = self.config["source"]["unreal_map"]
+        if not source_path:
+            QMessageBox.warning(self, "Source", "Veuillez d'abord sélectionner une map Unreal ou un dossier source.")
+            return
+
+        p = Path(source_path).expanduser()
+        export_dir = str(p.parent if p.is_file() else p)
+
+        cfg_dict = {
+            "paths": {
+                "ue_export_root": export_dir,
+                "godot_asset_root": self.config["advanced"].get("godot_asset_root", "res://UEAssets")
+            }
+        }
+        res_cfg = ResolvedConfig.resolve(cfg_dict, {}, {})
+
+        try:
+            from ue2godot.ue.steps import step1_manifest, step2_meshes
+            rep1 = step1_manifest.run(res_cfg)
+            rep2 = step2_meshes.run(res_cfg)
+            QMessageBox.information(
+                self,
+                "Exports Unreal",
+                f"Export terminé avec statut: Manifest ({rep1.status}), Meshes ({rep2.status}).\n"
+                "Les fichiers manifest et asset map ont été mis à jour."
+            )
+            self.on_source_changed()
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Exports Unreal",
+                f"Note: L'export direct nécessite l'environnement Python d'Unreal Engine.\n"
+                f"Détail : {exc}\n\nL'orchestrateur utilisera les scripts/remote execution lors du lancement de la pipeline."
+            )
+
     def refresh_source_ui(self) -> None:
         inv = self.inventory
 
@@ -2973,6 +3058,12 @@ class MainWindow(QMainWindow):
                 "Map Unreal détectée et structure de conversion principale disponible.",
                 "success",
             )
+        elif self.inventory.is_detected:
+            self.add_validation_row(
+                "Source",
+                "Source Unreal détectée (les exports manifest/asset map seront générés lors de l'exécution).",
+                "warning",
+            )
         else:
             self.add_validation_row(
                 "Source",
@@ -3108,7 +3199,7 @@ class MainWindow(QMainWindow):
                     "success",
                 )
 
-        real_errors = bool(errors) or not self.inventory.core_valid
+        real_errors = bool(errors) or not self.inventory.is_detected
 
         # validation_mode="strict" traite aussi les avertissements comme
         # bloquants (rien ne passe sans être résolu ou explicitement rétrogradé).
