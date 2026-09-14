@@ -1047,11 +1047,13 @@ class BrowseRow(QWidget):
         label: str,
         placeholder: str = "",
         directory: bool = True,
+        allow_files: bool = False,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
 
         self.directory = directory
+        self.allow_files = allow_files
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1071,12 +1073,19 @@ class BrowseRow(QWidget):
         self.label = label
 
     def browse(self) -> None:
-        if self.directory:
+        if self.directory and not self.allow_files:
+            path = QFileDialog.getExistingDirectory(
+                self,
+                f"Sélectionner le dossier — {self.label}",
+            )
+            if path:
+                self.input.setText(path)
+        elif self.allow_files:
             path, _ = QFileDialog.getOpenFileName(
                 self,
-                f"Sélectionner un fichier (.umap, .uproject, manifest) ou annuler pour choisir un dossier — {self.label}",
+                f"Sélectionner un fichier (.umap, .uproject, manifest) — {self.label}",
                 "",
-                "Fichiers Unreal / Manifest (*.umap *.uproject *.json);;Tous les fichiers (*)"
+                "Fichiers Unreal / Manifest (*.umap *.uproject *.json);;Dossier / Tous les fichiers (*)"
             )
             if not path:
                 path = QFileDialog.getExistingDirectory(
@@ -1745,8 +1754,9 @@ class MainWindow(QMainWindow):
 
         self.source_row = BrowseRow(
             "Map Unreal",
-            "Dossier de la map / package de conversion",
+            "Dossier de la map ou fichier (.umap, .uproject, manifest)",
             directory=True,
+            allow_files=True,
         )
         self.source_row.input.textChanged.connect(
             self.on_source_changed
