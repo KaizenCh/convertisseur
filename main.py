@@ -3383,6 +3383,9 @@ class MainWindow(QMainWindow):
         )
         self.result_status.set_state("success")
 
+        # Automatically switch UI stack and sidebar indicator to Page 5 (Reconstruction)
+        self.go_to_page(self.PAGE_RECONSTRUCTION)
+
     def launch_reconstruction(self) -> None:
         if not self.plan:
             self.prepare_reconstruction()
