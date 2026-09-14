@@ -1,0 +1,19 @@
+{
+  "profile_name": "_default",
+  "decals": {
+    "material_parameters": {
+      "mask": ["Mask", "Opacity Mask", "Alpha", "Opacity"],
+      "tint": ["Tint", "Tint 01", "Color", "BaseColor"],
+      "normal": ["Normal", "NormalMap"]
+    },
+    "tint_fallback": [1.0, 1.0, 1.0]
+  },
+  "vfx": {
+    "presets": {
+      "fire": {"color": [1.0, 0.4, 0.1, 1.0], "speed": 1.5, "lifetime": 1.0},
+      "spark": {"color": [1.0, 0.8, 0.2, 1.0], "speed": 3.0, "lifetime": 0.5},
+      "candle": {"color": [1.0, 0.6, 0.2, 1.0], "speed": 0.2, "lifetime": 0.8},
+      "smoke": {"color": [0.5, 0.5, 0.5, 0.5], "speed": 0.8, "lifetime": 2.0}
+    }
+  }
+}

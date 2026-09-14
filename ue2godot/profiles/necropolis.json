@@ -1,0 +1,15 @@
+{
+  "profile_name": "necropolis",
+  "decals": {
+    "material_parameters": {
+      "mask": ["Mask", "Opacity Mask"],
+      "tint": ["Tint 02", "Tint 01"],
+      "normal": ["Normal"]
+    }
+  },
+  "vfx": {
+    "presets": {
+      "candle": {"color": [1.0, 0.5, 0.1, 1.0], "torch_assumed_height_m": 1.40, "candle_assumed_height_m": 0.05}
+    }
+  }
+}
