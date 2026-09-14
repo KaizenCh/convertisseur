@@ -358,17 +358,33 @@ class SourceAnalyzer:
     LANDSCAPE_SYNTHETIC_KEY = "/AutoTerrain/Landscape.BakedLandscape"
 
     def analyze(self, source: str) -> SourceInventory:
-        root = Path(source).expanduser()
+        input_path = Path(source).expanduser()
+
+        if not input_path.exists():
+            inventory = SourceInventory(source_root=str(input_path))
+            inventory.errors.append("Le chemin source n'existe pas.")
+            return inventory
+
+        # If a file like .umap / .uproject is selected, resolve its directory or parent export location
+        if input_path.is_file():
+            root = input_path.parent
+        else:
+            root = input_path
+
+        # Find closest export or project directory
+        curr = root
+        search_roots = [root]
+        for _ in range(5):
+            if (curr / "level_manifest_v10.json").exists() or (curr / "GodotAssets").exists():
+                root = curr
+                break
+            if (curr / "Export").exists():
+                search_roots.append(curr / "Export")
+            if curr.parent == curr:
+                break
+            curr = curr.parent
 
         inventory = SourceInventory(source_root=str(root))
-
-        if not root.exists():
-            inventory.errors.append("Le dossier source n'existe pas.")
-            return inventory
-
-        if not root.is_dir():
-            inventory.errors.append("La source sélectionnée n'est pas un dossier.")
-            return inventory
 
         manifest = find_first_existing(
             root,
@@ -388,9 +404,10 @@ class SourceAnalyzer:
             inventory.manifest_found = True
             self._read_manifest(manifest, inventory)
         else:
-            inventory.errors.append(
-                "Manifest introuvable. Le constructeur a besoin de la description "
-                "complète de la map (level_manifest_v10.json)."
+            # If selecting a .umap or project without pre-exported manifest yet, mark as pending export instead of hard error
+            inventory.warnings.append(
+                "Manifest introuvable dans le dossier sélectionné. L'étape 1 (Manifest) générera "
+                "level_manifest_v10.json à partir de cette map Unreal."
             )
 
         asset_map = find_first_existing(
@@ -411,9 +428,8 @@ class SourceAnalyzer:
             inventory.asset_map_found = True
             self._read_asset_map(asset_map, inventory)
         else:
-            inventory.errors.append(
-                "Asset map introuvable (ue5_godot_asset_map.json). La résolution "
-                "UE5 → GLB ne peut pas être garantie."
+            inventory.warnings.append(
+                "Asset map introuvable (ue5_godot_asset_map.json). L'étape 2 (Meshes) générera l'asset map."
             )
 
         decal_map = find_first_existing(
@@ -443,8 +459,8 @@ class SourceAnalyzer:
             inventory.mesh_directory_found = True
             inventory.mesh_files = count_glb(mesh_dir)
         else:
-            inventory.errors.append(
-                "Dossier de meshes introuvable (GodotAssets/Meshes)."
+            inventory.warnings.append(
+                "Dossier de meshes introuvable (GodotAssets/Meshes). L'étape 2 (Meshes) exportera les GLB."
             )
 
         decal_dir = self._find_decal_directory(root)
