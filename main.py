@@ -1072,18 +1072,26 @@ class BrowseRow(QWidget):
 
     def browse(self) -> None:
         if self.directory:
-            path = QFileDialog.getExistingDirectory(
+            path, _ = QFileDialog.getOpenFileName(
                 self,
-                f"Sélectionner — {self.label}",
+                f"Sélectionner un fichier (.umap, .uproject, manifest) ou annuler pour choisir un dossier — {self.label}",
+                "",
+                "Fichiers Unreal / Manifest (*.umap *.uproject *.json);;Tous les fichiers (*)"
             )
+            if not path:
+                path = QFileDialog.getExistingDirectory(
+                    self,
+                    f"Sélectionner le dossier source — {self.label}",
+                )
+            if path:
+                self.input.setText(path)
         else:
             path, _ = QFileDialog.getOpenFileName(
                 self,
                 f"Sélectionner — {self.label}",
             )
-
-        if path:
-            self.input.setText(path)
+            if path:
+                self.input.setText(path)
 
     def text(self) -> str:
         return self.input.text().strip()

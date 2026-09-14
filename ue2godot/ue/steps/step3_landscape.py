@@ -63,19 +63,19 @@ def run(cfg: ResolvedConfig) -> StepReport:
             warnings=["No Landscape actor found in level."], counters=counters
         )
 
-    # Check assigned material contract (§3.5)
-    if cfg.get("landscape.require_assigned_material", True):
-        mat_assigned = False
-        for l in landscapes:
-            try:
-                m = l.get_editor_property("landscape_material")
-                if m is not None:
-                    mat_assigned = True
-                    break
-            except Exception:
-                pass
-        if not mat_assigned:
-            warnings.append("Landscape has no custom material assigned (default checker material).")
+    # Auto-configure landscape material & layers from dedicated folder
+    from ue2godot.ue.landscape_material_config import auto_configure_landscape_material
+    mat_folder = cfg.get("landscape.material_folder", "/Game/LandscapeMaterials")
+    mat_assigned = False
+    for l in landscapes:
+        mat_res = auto_configure_landscape_material(l, mat_folder)
+        if mat_res.get("assigned_material"):
+            mat_assigned = True
+            if mat_res.get("auto_configured"):
+                warnings.append(f"Landscape material auto-assigned: {mat_res['assigned_material']}")
+
+    if not mat_assigned and cfg.get("landscape.require_assigned_material", True):
+        warnings.append("Landscape has no custom material assigned (default checker material).")
 
     # Measure bounds
     min_x, max_x = float("inf"), float("-inf")
