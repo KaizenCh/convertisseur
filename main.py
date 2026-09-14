@@ -91,6 +91,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import ue2godot
+from ue2godot.core.config import ResolvedConfig, deep_merge, compute_config_hash
+from ue2godot.orchestrator.step5_copy import copy_step5
+
 
 APP_NAME = "UE5 → GODOT CONSTRUCTOR"
 APP_VERSION = "0.2.0"
@@ -860,167 +864,28 @@ class OrchestratorAdapter(QObject):
             self.failed.emit("Projet Godot invalide ou project.godot introuvable.")
             return False
 
-        asset_root = project / plan.get("godot_asset_root", "UEAssets")
-        mesh_dst = asset_root / "Meshes"
-        decal_dst = asset_root / "Decals"
+        source_root = plan.get("source", "")
+        cfg_dict = {
+            "paths": {
+                "ue_export_root": source_root,
+                "godot_project_root": str(project),
+                "godot_asset_root": plan.get("godot_asset_root", "res://UEAssets")
+            }
+        }
+        res_cfg = ResolvedConfig.resolve(cfg_dict, {}, {})
 
-        overwrite_policy = plan.get("overwrite_policy", "safe")
-        fallback_policy = plan.get("fallback_policy", "report")
-        resume_enabled = bool(plan.get("resume_enabled", True))
-        keep_intermediate = bool(plan.get("keep_intermediate", True))
-        verbose = bool(plan.get("verbose_logs", False))
+        report = copy_step5(res_cfg)
 
-        jobs: list[tuple[Path, Path]] = []
-        missing: list[str] = []
+        copied = report.counters.get("files_copied", 0)
+        errors = report.errors
 
-        mesh_dir = Path(plan["mesh_directory"]).expanduser() if plan.get("mesh_directory") else None
-        if mesh_dir and mesh_dir.is_dir():
-            for glb in sorted(mesh_dir.rglob("*.glb")):
-                relative = glb.relative_to(mesh_dir)
-                jobs.append((glb, mesh_dst / relative))
-        else:
-            missing.append("dossier des meshes (GodotAssets/Meshes)")
+        self.last_copy_stats = {"copied": copied, "skipped": 0, "errors": len(errors)}
 
-        if plan.get("decals_selected"):
-            decal_dir = Path(plan["decal_directory"]).expanduser() if plan.get("decal_directory") else None
-            if decal_dir and decal_dir.is_dir():
-                for png in sorted(decal_dir.rglob("*.png")):
-                    relative = png.relative_to(decal_dir)
-                    jobs.append((png, decal_dst / relative))
-            else:
-                missing.append("dossier des decals (GodotAssets/Decals)")
-
-        # Le reconstructeur .gd attend les 3 JSON à la racine res:// du projet
-        # (MANIFEST_PATH/ASSET_MAP_PATH/DECAL_MAP_PATH sont des chemins "res://xxx.json"
-        # en dur, sans préfixe UEAssets) — seuls les binaires (Meshes/Decals) vivent
-        # sous godot_asset_root. Ne pas retomber sur godot_asset_root par défaut ici :
-        # ça enverrait les JSON au mauvais endroit et le .gd ne les trouverait plus.
-        json_root_name = plan.get("godot_json_root", "")
-        json_dst_dir = project / json_root_name if json_root_name else project
-
-        for key, label in (
-            ("manifest", "level_manifest_v10.json"),
-            ("asset_map", "ue5_godot_asset_map.json"),
-            ("decal_map", "ue5_godot_decal_map.json"),
-        ):
-            source_path = plan.get(key)
-            if source_path:
-                path = Path(source_path).expanduser()
-                if path.is_file():
-                    jobs.append((path, json_dst_dir / path.name))
-                    continue
-            if key == "decal_map" and not plan.get("decals_selected"):
-                continue
-            missing.append(label)
-
-        # --- fallback_policy : que faire des sources manquantes ? ---
-        if missing:
-            if fallback_policy == "controlled":
-                # "Fallback contrôlé" : on retente une résolution best-effort en
-                # cherchant récursivement dans la source avant d'abandonner.
-                source_root = Path(plan.get("source", "")).expanduser()
-                still_missing = []
-                for item in missing:
-                    resolved = None
-                    if source_root.is_dir():
-                        try:
-                            resolved = next(source_root.rglob(item.split(" ")[0]), None)
-                        except (OSError, PermissionError):
-                            resolved = None
-                    if resolved is None:
-                        still_missing.append(item)
-                    else:
-                        self.log.emit(f"Fallback : {item} résolu via {resolved}")
-                missing = still_missing
-
-            if missing and fallback_policy in ("controlled", "none"):
-                self.failed.emit(
-                    "Copie annulée : fichier(s) source manquant(s) — "
-                    + ", ".join(missing)
-                    + ". (Politique de fallback : "
-                    + ("interdiction de continuer" if fallback_policy == "none" else "fallback épuisé")
-                    + ".)"
-                )
-                return False
-
-            # fallback_policy == "report" : on continue avec ce qui est
-            # disponible, mais on le signale clairement plutôt que de le taire.
-            for item in missing:
-                self.log.emit(f"⚠ Source manquante, ignorée : {item}")
-
-        total = len(jobs)
-        if total == 0:
-            self.failed.emit("Aucun fichier à copier : rien à faire.")
+        if report.status == "FAILED":
+            self.failed.emit(f"Échec de la copie step5: {', '.join(errors)}")
             return False
 
-        self.step_changed.emit("copy_assets")
-        self.log.emit(
-            f"Copie de {total} fichier(s) vers {asset_root} "
-            f"(politique d'écriture : {overwrite_policy})."
-        )
-
-        backup_dir: Optional[Path] = None
-        if keep_intermediate:
-            backup_dir = project / ".ue5_godot_pipeline_backups" / datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        copied = 0
-        skipped = 0
-        errors: list[str] = []
-
-        for index, (src, dst) in enumerate(jobs, start=1):
-            try:
-                exists = dst.exists()
-                same_size = exists and dst.is_file() and dst.stat().st_size == src.stat().st_size
-
-                if overwrite_policy == "safe" and exists:
-                    skipped += 1
-                    if verbose:
-                        self.log.emit(f"[safe] ignoré (existe déjà) : {dst}")
-                    self.progress.emit(int(index / total * 100))
-                    continue
-
-                if exists and resume_enabled and same_size and overwrite_policy != "force":
-                    skipped += 1
-                    if verbose:
-                        self.log.emit(f"[resume] déjà à jour, ignoré : {dst}")
-                    self.progress.emit(int(index / total * 100))
-                    continue
-
-                if exists and keep_intermediate and backup_dir is not None and overwrite_policy in ("replace", "force"):
-                    try:
-                        relative = dst.relative_to(project)
-                    except ValueError:
-                        relative = Path(dst.name)
-                    backup_path = backup_dir / relative
-                    backup_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(dst, backup_path)
-
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
-                copied += 1
-                if verbose:
-                    self.log.emit(f"Copié : {src.name} → {dst}")
-
-            except OSError as exc:
-                errors.append(f"{src} → {dst} : {exc}")
-
-            self.progress.emit(int(index / total * 100))
-
-        self.last_copy_stats = {"copied": copied, "skipped": skipped, "errors": len(errors)}
-
-        self.log.emit(
-            f"Copie terminée : {copied} copié(s), {skipped} ignoré(s), {len(errors)} erreur(s)."
-        )
-        for error in errors:
-            self.log.emit(f"✕ {error}")
-
-        if backup_dir is not None and backup_dir.exists():
-            self.log.emit(f"Sauvegardes des fichiers remplacés : {backup_dir}")
-
-        if errors and not copied and not skipped:
-            self.failed.emit("La copie des assets a échoué intégralement.")
-            return False
-
+        self.log.emit(f"Step 5 Copy (ue2godot) terminée : {copied} fichier(s) copié(s) et vérifié(s).")
         return True
 
     def open_godot(self, plan: dict[str, Any]) -> bool:
