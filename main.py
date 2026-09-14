@@ -404,8 +404,7 @@ class SourceAnalyzer:
             inventory.manifest_found = True
             self._read_manifest(manifest, inventory)
         else:
-            # If selecting a .umap or project without pre-exported manifest yet, mark as pending export instead of hard error
-            inventory.warnings.append(
+            inventory.notes.append(
                 "Manifest introuvable dans le dossier sélectionné. L'étape 1 (Manifest) générera "
                 "level_manifest_v10.json à partir de cette map Unreal."
             )
@@ -428,7 +427,7 @@ class SourceAnalyzer:
             inventory.asset_map_found = True
             self._read_asset_map(asset_map, inventory)
         else:
-            inventory.warnings.append(
+            inventory.notes.append(
                 "Asset map introuvable (ue5_godot_asset_map.json). L'étape 2 (Meshes) générera l'asset map."
             )
 
@@ -459,7 +458,7 @@ class SourceAnalyzer:
             inventory.mesh_directory_found = True
             inventory.mesh_files = count_glb(mesh_dir)
         else:
-            inventory.warnings.append(
+            inventory.notes.append(
                 "Dossier de meshes introuvable (GodotAssets/Meshes). L'étape 2 (Meshes) exportera les GLB."
             )
 
@@ -2919,7 +2918,7 @@ class MainWindow(QMainWindow):
 
         # Keep the existing technical defaults coherent with the visible level.
         if value >= 90:
-            self.config["advanced"]["validation_mode"] = "strict"
+            self.config["advanced"]["validation_mode"] = "standard"
             self.config["advanced"]["asset_resolution"] = "strict"
             self.config["advanced"]["fallback_policy"] = "report"
         elif value >= 50:
@@ -3319,26 +3318,15 @@ class MainWindow(QMainWindow):
             self.pages.setCurrentIndex(self.PAGE_VALIDATION)
             return
 
-        if not ok and self._last_validation_mode == "strict" and self._last_validation_warnings:
-            answer = QMessageBox.warning(
-                self,
-                "Mode de validation strict",
-                "La validation « stricte » bloque tant qu'il reste des avertissements.\n\n"
-                "Tu peux corriger la source, ou passer la validation en mode « Standard » "
-                "ou « Diagnostic » dans les options avancées si tu veux avancer malgré ça.",
-                QMessageBox.Ok,
-            )
-            self.pages.setCurrentIndex(self.PAGE_VALIDATION)
-            return
-
         if self._last_validation_warnings and self._last_validation_mode != "diagnostic":
             answer = QMessageBox.question(
                 self,
-                "Avertissements non bloquants",
-                "La vérification a relevé des avertissements (voir la page "
-                "Vérification pour le détail). Continuer quand même ?",
+                "Continuer la reconstruction",
+                "Certaines étapes d'export (Manifest / Meshes / Decals) seront générées "
+                "automatiquement lors de l'exécution de la pipeline.\n\n"
+                "Voulez-vous préparer le plan et continuer vers la reconstruction ?",
                 QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.Yes,
             )
             if answer != QMessageBox.Yes:
                 self.pages.setCurrentIndex(self.PAGE_VALIDATION)
