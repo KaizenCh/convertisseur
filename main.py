@@ -3081,8 +3081,8 @@ class MainWindow(QMainWindow):
         else:
             self.add_validation_row(
                 "Manifest",
-                "La description exhaustive de la map manque.",
-                "danger",
+                "Manifest non présent : sera généré automatiquement depuis la map source lors de l'exécution (Étape 1).",
+                "warning",
             )
 
         # Asset map
@@ -3095,8 +3095,8 @@ class MainWindow(QMainWindow):
         else:
             self.add_validation_row(
                 "Asset map",
-                "Impossible de garantir la résolution des meshes.",
-                "danger",
+                "Asset map non présente : sera générée automatiquement lors de l'export des meshes (Étape 2).",
+                "warning",
             )
 
         # GLB
@@ -3109,8 +3109,8 @@ class MainWindow(QMainWindow):
         else:
             self.add_validation_row(
                 "Meshes",
-                "Aucun GLB détecté.",
-                "danger",
+                "Aucun GLB présent : l'étape d'export des meshes générera les fichiers GLB.",
+                "warning",
             )
 
         # Project
