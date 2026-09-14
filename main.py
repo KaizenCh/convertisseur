@@ -1884,6 +1884,21 @@ class MainWindow(QMainWindow):
 
         page.addWidget(self.context_source_card)
 
+        # Action bar at bottom of Page 2 (Sources)
+        actions = QHBoxLayout()
+
+        self.generate_manifest_button = QPushButton("Générer les exports Unreal (Manifest & Assets)")
+        self.generate_manifest_button.setObjectName("SecondaryButton")
+        self.generate_manifest_button.clicked.connect(self.run_unreal_export_steps)
+
+        self.next_to_options_button = QPushButton("Continuer vers Options →")
+        self.next_to_options_button.clicked.connect(lambda: self.go_to_page(self.PAGE_OPTIONS))
+
+        actions.addWidget(self.generate_manifest_button)
+        actions.addStretch()
+        actions.addWidget(self.next_to_options_button)
+
+        page.addLayout(actions)
         page.addStretch()
         return page
 
@@ -2550,6 +2565,38 @@ class MainWindow(QMainWindow):
             self.preprocessing_check.isChecked()
         )
 
+    def run_unreal_export_steps(self) -> None:
+        if not self.config["source"]["unreal_map"]:
+            QMessageBox.warning(self, "Source", "Veuillez d'abord sélectionner une map Unreal ou un dossier source.")
+            return
+
+        cfg_dict = {
+            "paths": {
+                "ue_export_root": self.config["source"]["unreal_map"],
+                "godot_asset_root": self.config["advanced"].get("godot_asset_root", "res://UEAssets")
+            }
+        }
+        res_cfg = ResolvedConfig.resolve(cfg_dict, {}, {})
+
+        try:
+            from ue2godot.ue.steps import step1_manifest, step2_meshes
+            rep1 = step1_manifest.run(res_cfg)
+            rep2 = step2_meshes.run(res_cfg)
+            QMessageBox.information(
+                self,
+                "Exports Unreal",
+                f"Export terminé avec statut: Manifest ({rep1.status}), Meshes ({rep2.status}).\n"
+                "Les fichiers manifest et asset map ont été mis à jour."
+            )
+            self.on_source_changed()
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Exports Unreal",
+                f"Note: L'export direct nécessite l'environnement Python d'Unreal Engine.\n"
+                f"Détail : {exc}\n\nL'orchestrateur utilisera les scripts/remote execution lors du lancement de la pipeline."
+            )
+
     def refresh_source_ui(self) -> None:
         inv = self.inventory
 
@@ -3007,6 +3054,12 @@ class MainWindow(QMainWindow):
                 "Map Unreal détectée et structure de conversion principale disponible.",
                 "success",
             )
+        elif self.inventory.is_detected:
+            self.add_validation_row(
+                "Source",
+                "Source Unreal détectée (les exports manifest/asset map seront générés lors de l'exécution).",
+                "warning",
+            )
         else:
             self.add_validation_row(
                 "Source",
@@ -3142,7 +3195,7 @@ class MainWindow(QMainWindow):
                     "success",
                 )
 
-        real_errors = bool(errors) or not self.inventory.core_valid
+        real_errors = bool(errors) or not self.inventory.is_detected
 
         # validation_mode="strict" traite aussi les avertissements comme
         # bloquants (rien ne passe sans être résolu ou explicitement rétrogradé).
